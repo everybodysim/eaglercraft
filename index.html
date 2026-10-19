@@ -979,92 +979,103 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
 	
 <script type="text/javascript">
 /*
- * everybodysim patches: pointer-lock re-lock enforcement + mouse-wheel hotbar.
+ * everybodysim patches: pointer-lock re-lock enforcement v2 + mouse-wheel hotbar.
  */
 (function () {
   "use strict";
   try {
-    /* ---------- 1. Pointer lock: retry the game's own failed lock requests ---------- */
-    var pendingLock = false, lockTries = 0, gameCanvas = null, gestureBound = false;
+    /* Pointer lock v2:
+     *  - tracks the game's lock requests on ANY element (canvas or wrapper)
+     *  - retries failed requests (Chrome ESC-cooldown / gesture rules)
+     *  - re-locks when the user leaves a menu (E / ESC) shortly after losing the
+     *    lock, and cancels if the game opens a menu in that window instead */
+    var pendingLock = false, lockTries = 0, lockTarget = null, gestureBound = false;
+    var everLocked = false, unlockedAt = 0, scheduled = null;
 
-    if (Element.prototype.requestPointerLock) {
-      var origRequest = Element.prototype.requestPointerLock;
-      Element.prototype.requestPointerLock = function () {
-        try {
-          if (this && this.tagName === "CANVAS") {
-            gameCanvas = this;
-            pendingLock = true;
-            lockTries = 0;
-          }
-        } catch (e) {}
-        return origRequest.apply(this, arguments);
-      };
-    }
-    if (Document.prototype.exitPointerLock) {
-      var origExit = Document.prototype.exitPointerLock;
-      Document.prototype.exitPointerLock = function () {
-        try { pendingLock = false; } catch (e) {}
-        return origExit.apply(this, arguments);
-      };
-    }
+    var origRequest = Element.prototype.requestPointerLock;
+    Element.prototype.requestPointerLock = function () {
+      try { lockTarget = this; pendingLock = true; lockTries = 0; } catch (e) {}
+      return origRequest.apply(this, arguments);
+    };
+    var origExit = Document.prototype.exitPointerLock;
+    Document.prototype.exitPointerLock = function () {
+      try {
+        pendingLock = false;
+        if (scheduled) { clearTimeout(scheduled); scheduled = null; }
+      } catch (e) {}
+      return origExit.apply(this, arguments);
+    };
     document.addEventListener("pointerlockchange", function () {
-      if (document.pointerLockElement) { pendingLock = false; lockTries = 0; }
+      if (document.pointerLockElement) {
+        everLocked = true; pendingLock = false; lockTries = 0;
+      } else if (everLocked) {
+        unlockedAt = Date.now();
+      }
     });
     document.addEventListener("pointerlockerror", function () {
       try {
         if (!pendingLock) return;
         lockTries++;
         if (lockTries <= 2) {
-          var delay = 1300 * lockTries;
+          var d = 1300 * lockTries;
           setTimeout(function () {
-            try {
-              if (pendingLock && !document.pointerLockElement && gameCanvas) {
-                gameCanvas.requestPointerLock();
-              }
-            } catch (e) {}
-          }, delay);
-        } else {
-          bindGestureRetry();
-        }
+            try { if (pendingLock && !document.pointerLockElement && lockTarget) lockTarget.requestPointerLock(); } catch (e) {}
+          }, d);
+        } else { bindGestureRetry(); }
       } catch (e) {}
     });
+    function requestNow() {
+      var t = lockTarget;
+      if (!t) { try { t = document.querySelector("canvas"); } catch (e) {} }
+      if (t && !document.pointerLockElement) {
+        pendingLock = true; lockTries = 0;
+        try { t.requestPointerLock(); } catch (e) {}
+      }
+    }
     function bindGestureRetry() {
       if (gestureBound) return;
       gestureBound = true;
       function go() {
-        try {
-          if (pendingLock && !document.pointerLockElement && gameCanvas) {
-            gameCanvas.requestPointerLock();
-          }
-        } catch (e) {} finally {
-          pendingLock = pendingLock && !!document.pointerLockElement === false ? pendingLock : false;
-          gestureBound = false;
-          window.removeEventListener("mousedown", go, true);
-          window.removeEventListener("keydown", go, true);
-        }
+        gestureBound = false;
+        window.removeEventListener("mousedown", go, true);
+        window.removeEventListener("keydown", go, true);
+        if (pendingLock && !document.pointerLockElement) requestNow();
       }
       window.addEventListener("mousedown", go, true);
       window.addEventListener("keydown", go, true);
     }
+    /* Leaving a menu (E / ESC) within 10s of losing the lock => re-lock.
+     * The window keeps this from firing at the title screen or on later E-opens. */
+    window.addEventListener("keydown", function (e) {
+      try {
+        if (!everLocked || document.pointerLockElement) return;
+        if (e.code !== "KeyE" && e.code !== "Escape") return;
+        if (Date.now() - unlockedAt > 10000) return;
+        if (scheduled) clearTimeout(scheduled);
+        scheduled = setTimeout(function () {
+          scheduled = null;
+          try { if (!document.pointerLockElement) requestNow(); } catch (x) {}
+        }, 120);
+      } catch (x) {}
+    }, true);
 
-    /* ---------- 2. Mouse wheel -> hotbar slot (only while pointer is locked) ---------- */
+    /* Mouse wheel -> hotbar slot (only while pointer is locked) */
     var slot = 0;
     var DIGITS = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","Digit7","Digit8","Digit9"];
     window.addEventListener("keydown", function (e) {
       var i = DIGITS.indexOf(e.code);
       if (i >= 0) slot = i;
     }, true);
-
     function gameCanvasEl() {
       try { return document.querySelector("canvas") || document; } catch (e) { return document; }
     }
     window.addEventListener("wheel", function (e) {
       try {
-        if (!document.pointerLockElement) return;   // menus keep native wheel
+        if (!document.pointerLockElement) return;
         var dy = e.deltaY;
         if (!dy || typeof dy !== "number") return;
         e.preventDefault();
-        var dir = dy > 0 ? 1 : -1;                  // wheel down = slot to the right
+        var dir = dy > 0 ? 1 : -1;
         slot = (slot + dir + 9) % 9;
         var target = gameCanvasEl();
         var evInit = { code: DIGITS[slot], key: String(slot + 1), bubbles: true, cancelable: true };
@@ -1074,6 +1085,7 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
     }, { passive: false, capture: true });
   } catch (outer) { try { console.warn("[ebs-patch] disabled: " + outer); } catch (e) {} }
 })();
+
 </script>
 
 
