@@ -1116,6 +1116,12 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
   window.addEventListener("keydown", function (e) {
     if (e.code === "F8") { try { e.preventDefault(); } catch (x) {} toggle(); }
   }, true);
+  try {
+    if (/[?&]diag/.test(window.location.search) && !/perfdebug/.test(window.location.search)) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search + "&perfdebug");
+      try { window.__eaglerPerfEnabled = true; } catch (e) {}
+    }
+  } catch (e) {}
   if (/[?&]diag/.test(window.location.search)) {
     var boot = setInterval(function () { if (document.body) { toggle(); clearInterval(boot); } }, 250);
   }
