@@ -1076,6 +1076,52 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
 })();
 </script>
 
+
+<script type="text/javascript">
+/* everybodysim diagnostics overlay: F8 or ?diag — mirrors the game's own perf logs into the DOM. */
+(function () {
+  "use strict";
+  var perfLines = [];
+  var panel = null, timer = null;
+  function capture(s) {
+    if (/EagPerf|MeshWorker|Integrated server|Autosave|mesh-worker|worker booted|tick avg/.test(s)) {
+      perfLines.push(String(s).slice(0, 500));
+      if (perfLines.length > 60) perfLines.shift();
+      if (panel) render();
+    }
+  }
+  var olog = console.log, owarn = console.warn, oerr = console.error;
+  console.log = function () { try { capture(Array.prototype.join.call(arguments, " ")); } catch (e) {} return olog.apply(console, arguments); };
+  console.warn = function () { try { capture(Array.prototype.join.call(arguments, " ")); } catch (e) {} return owarn.apply(console, arguments); };
+  console.error = function () { try { capture(Array.prototype.join.call(arguments, " ")); } catch (e) {} return oerr.apply(console, arguments); };
+  function stats() {
+    var out = ["== boot tail =="];
+    try { var l = window.__log || []; out = out.concat(l.slice(-14).map(String)); } catch (e) {}
+    out.push("== mesh pool ==");
+    try { out.push(JSON.stringify(window.__meshWorkerPool || null)); } catch (e) { out.push("unserializable"); }
+    out.push("== perf ==");
+    out = out.concat(perfLines.slice(-26));
+    return out.join("\n");
+  }
+  function render() { if (panel) panel.textContent = stats(); }
+  function toggle() {
+    if (panel) { panel.remove(); panel = null; if (timer) clearInterval(timer); return; }
+    panel = document.createElement("pre");
+    panel.id = "ebs-diag";
+    panel.style.cssText = "position:fixed;top:0;left:0;right:0;max-height:45%;overflow:auto;background:rgba(0,0,0,.82);color:#9fe8a0;padding:8px;font:11px/1.35 monospace;z-index:2147483647;white-space:pre-wrap;margin:0;";
+    (document.body || document.documentElement).appendChild(panel);
+    render();
+    timer = setInterval(render, 1000);
+  }
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "F8") { try { e.preventDefault(); } catch (x) {} toggle(); }
+  }, true);
+  if (/[?&]diag/.test(window.location.search)) {
+    var boot = setInterval(function () { if (document.body) { toggle(); clearInterval(boot); } }, 250);
+  }
+})();
+</script>
+
 <script type="module">
 		(async () => {
 			try {
