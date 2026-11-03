@@ -1169,6 +1169,17 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
     if (m) ebsClick(parseInt(m[1], 10), parseInt(m[2], 10));
     var r = /relclick=([0-9.]+),([0-9.]+)/.exec(window.location.hash || "");
     if (r) ebsClick(Math.round(parseFloat(r[1]) * window.innerWidth), Math.round(parseFloat(r[2]) * window.innerHeight));
+    var s = /pts=([0-9.,;]+)/.exec(window.location.hash || "");
+    if (s) {
+      var list = s[1].split(";");
+      list.forEach(function (pair, idx) {
+        var xy = pair.split(",");
+        if (xy.length !== 2) return;
+        setTimeout(function () {
+          ebsClick(Math.round(parseFloat(xy[0]) * window.innerWidth), Math.round(parseFloat(xy[1]) * window.innerHeight));
+        }, idx * 900);
+      });
+    }
   }
   window.addEventListener("hashchange", hashClick);
   setTimeout(hashClick, 500);
