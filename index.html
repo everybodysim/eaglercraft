@@ -1084,33 +1084,83 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
     window.addEventListener("mousedown", function () { tryLock(false); }, true);
     window.addEventListener("wheel", function () { tryLock(false); }, { capture: true, passive: true });
 
-    /* Single-click protection: swallow duplicate mouse presses.
-     * This build can deliver the same physical click twice within a few ms, which
-     * double-fires break/place in creative. Duplicates under 35ms are blocked;
-     * genuinely fast clicking (>= ~60ms apart) still works. */
+    /* Single-click protection v2.
+     * The old 35ms blocker was eating real clicks when the game double-fired a full
+     * press pair. This version never blocks a release, only blocks an *impossible*
+     * duplicate press (< 8ms, cannot be human), and adds a stuck-button watchdog:
+     * if the game was told a button went down and no release ever reached it while
+     * the physical button is up, it force-releases so break/place can't latch. */
     (function () {
-      var GUARD_MS = 35;
-      var last = { down: {}, up: {} };
-      function tooFast(family, kind, ev) {
+      var DOWN_GUARD_MS = 8;
+      var lastDown = { m: {}, p: {} };
+      var gameDown = {};       // button -> timestamp a down was delivered to the game
+      var physDown = {};       // button -> physical state
+
+      function now() {
+        return (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      }
+      function target() {
+        try { return document.querySelector("canvas") || document.body; } catch (e) { return document.body; }
+      }
+      function sendUp(button, viaPointer) {
         try {
-          var b = ev.button | 0;
-          var k = family + b;
-          var now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-          var t = last[kind][k];
-          last[kind][k] = now;
-          return typeof t === "number" && (now - t) < GUARD_MS;
-        } catch (e) { return false; }
+          var el = target();
+          var ev = null;
+          if (viaPointer && typeof PointerEvent !== "undefined") {
+            try { el.dispatchEvent(new PointerEvent("pointerup", { button: button, buttons: 0, bubbles: true, pointerId: 1, pointerType: "mouse", isPrimary: true })); } catch (e) {}
+          }
+          el.dispatchEvent(new MouseEvent("mouseup", { button: button, buttons: 0, which: button + 1, view: window, bubbles: true, cancelable: true }));
+          trace("watchdog released b" + button);
+        } catch (e) {}
       }
-      function check(ev, family, kind) {
-        if (tooFast(family, kind, ev)) {
-          try { ev.stopImmediatePropagation(); ev.stopPropagation(); ev.preventDefault(); } catch (x) {}
-          trace("dup " + family + kind + " b" + ev.button + " blocked");
+
+      window.addEventListener("mousedown", function (e) {
+        var b = e.button | 0, t = now();
+        if ((t - (lastDown.m[b] || -1e9)) < DOWN_GUARD_MS) {
+          try { e.stopImmediatePropagation(); e.stopPropagation(); e.preventDefault(); } catch (x) {}
+          sendUp(b, false);       // never leave a phantom press latched
+          trace("dup down b" + b + " blocked");
+          return;
         }
-      }
-      window.addEventListener("mousedown", function (e) { check(e, "m", "down"); }, true);
-      window.addEventListener("mouseup", function (e) { check(e, "m", "up"); }, true);
-      try { window.addEventListener("pointerdown", function (e) { check(e, "p", "down"); }, true); } catch (x) {}
-      try { window.addEventListener("pointerup", function (e) { check(e, "p", "up"); }, true); } catch (x) {}
+        lastDown.m[b] = t;
+        gameDown[b] = t;
+        physDown[b] = true;
+      }, true);
+
+      window.addEventListener("mouseup", function (e) {
+        var b = e.button | 0;
+        delete physDown[b];
+        delete gameDown[b];
+      }, true);
+
+      try {
+        window.addEventListener("pointerdown", function (e) {
+          var b = e.button | 0, t = now();
+          if ((t - (lastDown.p[b] || -1e9)) < DOWN_GUARD_MS) {
+            try { e.stopImmediatePropagation(); e.stopPropagation(); e.preventDefault(); } catch (x) {}
+            trace("dup pointerdown b" + b + " blocked");
+            return;
+          }
+          lastDown.p[b] = t;
+        }, true);
+        window.addEventListener("pointerup", function () {}, true);
+      } catch (x) {}
+
+      /* Watchdog: a down the game saw but never got a release for, while the mouse is
+       * physically not held, would make break/place auto-repeat ("keeps clicking"). */
+      setInterval(function () {
+        try {
+          for (var k in gameDown) {
+            if (!Object.prototype.hasOwnProperty.call(gameDown, k)) continue;
+            var b = k | 0;
+            if (physDown[b]) continue;                       // genuinely held
+            if ((now() - gameDown[b]) > 400) {
+              delete gameDown[b];
+              sendUp(b, true);
+            }
+          }
+        } catch (e) {}
+      }, 250);
     })();
 
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
