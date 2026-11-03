@@ -1163,6 +1163,60 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       }, 250);
     })();
 
+    /* Ctrl+W / reserved browser shortcut protection.
+     * Chrome pages cannot block Ctrl+W or Ctrl+Space with preventDefault. The only
+     * real fix is the Keyboard Lock API, which works while the page is fullscreen:
+     * the page then receives EVERY key and the browser stops acting on Ctrl+W,
+     * Ctrl+Space (IME), Ctrl+T and similar. We arm it automatically when a world
+     * takes pointer lock, using that click as the required user gesture.
+     * Add ?nofs to the URL to keep it off. F11, or holding Esc ~2s, exits. */
+    (function () {
+      var disabled = /[?&]nofs\b/.test(window.location.search);
+      window.__ebsKbLocked = false;
+      function inFullscreen() {
+        return !!(document.fullscreenElement || document.webkitFullscreenElement);
+      }
+      function arm() {
+        try {
+          if (disabled) return;
+          var el = document.documentElement;
+          var req = el.requestFullscreen || el.webkitRequestFullscreen;
+          var go = function () {
+            try {
+              if (navigator.keyboard && typeof navigator.keyboard.lock === "function") {
+                navigator.keyboard.lock().then(function () {
+                  window.__ebsKbLocked = true;
+                  trace("keyboard LOCKED (ctrl+w safe)");
+                }).catch(function () { trace("keyboard lock denied"); });
+              } else {
+                trace("keyboard.lock unsupported (Firefox/Safari)");
+              }
+            } catch (e) {}
+          };
+          if (inFullscreen()) { go(); return; }
+          if (!req) return;
+          try {
+            var p = el.requestFullscreen ? el.requestFullscreen({ navigationUI: "hide" }) : req.call(el);
+            if (p && typeof p.then === "function") p.then(go).catch(function () { trace("fullscreen denied"); });
+            else { setTimeout(function () { if (inFullscreen()) go(); }, 120); }
+          } catch (e) { trace("fullscreen threw"); }
+        } catch (e) {}
+      }
+      document.addEventListener("fullscreenchange", function () {
+        if (!inFullscreen()) window.__ebsKbLocked = false;
+      });
+      document.addEventListener("pointerlockchange", function () {
+        if (document.pointerLockElement) setTimeout(arm, 40);
+      });
+      /* If the user escaped fullscreen mid-world, re-arm on their next input. */
+      window.addEventListener("mousedown", function () {
+        if (!disabled && document.pointerLockElement && !inFullscreen()) setTimeout(arm, 0);
+      }, true);
+      window.addEventListener("keydown", function (e) {
+        if (!disabled && document.pointerLockElement && !inFullscreen() && !e.ctrlKey) setTimeout(arm, 0);
+      }, true);
+    })();
+
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
     var slot = 0;
     var DIGITS = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","Digit7","Digit8","Digit9"];
@@ -1213,7 +1267,9 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
   function stats() {
     var out = ["viewport: " + window.innerWidth + "x" + window.innerHeight
       + " | lock: " + (document.pointerLockElement ? (document.pointerLockElement.tagName || "el") : "none")
-      + " | focused: " + document.hasFocus()];
+      + " | focused: " + document.hasFocus()
+      + " | fullscreen: " + (document.fullscreenElement ? "on" : "off")
+      + " | kb-lock: " + (window.__ebsKbLocked ? "on" : "off")];
     out.push("== lock trace ==");
     out = out.concat((window.__ebsLockTrace || []).slice(-8));
     out.push("== boot tail ==");
