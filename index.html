@@ -774,9 +774,9 @@ Z12aSGrXHoYwXux247w3UelvBftWMZo0Wlbr3iVBUh8E3CfkL+41ZHFc3Qbaqn8YqSFHaWIH21A2KQEL
 			var cores = Number(navigator.hardwareConcurrency) || 4;
 			var appleUnknownMemory = memory <= 0 && /Mac|iPhone|iPad|iPod/.test(
 				(navigator.platform || "") + " " + (navigator.userAgent || ""));
-			if ((memory > 0 && memory <= 4) || cores <= 4) return 1;
-			if (appleUnknownMemory) return cores >= 8 ? 2 : 1;
-			return memory >= 8 && cores >= 8 ? 3 : 2;
+			if ((memory > 0 && memory <= 4) || cores <= 4) return 2;
+			if (appleUnknownMemory) return cores >= 8 ? 3 : 2;
+			return memory >= 8 && cores >= 8 ? 5 : 3;
 		}
 		window.eaglercraftXOpts = {
 			container: "game_frame",
@@ -984,60 +984,48 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
 (function () {
   "use strict";
   try {
-    /* Pointer lock v2:
-     *  - tracks the game's lock requests on ANY element (canvas or wrapper)
-     *  - retries failed requests (Chrome ESC-cooldown / gesture rules)
-     *  - re-locks when the user leaves a menu (E / ESC) shortly after losing the
-     *    lock, and cancels if the game opens a menu in that window instead */
+    /* Pointer lock v3: lock on ANY input while in a world unless a menu is detected open.
+     * Menu detection: the game hides the OS cursor while playing (html5 cursor support),
+     * so a visible cursor on the canvas/wrapper/body means a menu is up. If the cursor
+     * signal is unavailable we fall back to "the game just exited lock" timing. */
     window.__ebsLockTrace = window.__ebsLockTrace || [];
     function trace(s) { try { window.__ebsLockTrace.push(Math.round(performance.now()) + "ms " + s); if (window.__ebsLockTrace.length > 40) window.__ebsLockTrace.shift(); } catch (e) {} }
+
     var pendingLock = false, lockTries = 0, lockTarget = null, gestureBound = false;
-    var everLocked = false, unlockedAt = 0, scheduled = null;
+    var everLocked = false, lastGameExit = 0, scheduled = null;
 
     var origRequest = Element.prototype.requestPointerLock;
     Element.prototype.requestPointerLock = function () {
-      try { lockTarget = this; pendingLock = true; lockTries = 0; trace("game request (" + (this.tagName || "?") + ")"); } catch (e) {}
+      try { lockTarget = this; pendingLock = true; lockTries = 0; trace("game request"); } catch (e) {}
       return origRequest.apply(this, arguments);
     };
     var origExit = Document.prototype.exitPointerLock;
     Document.prototype.exitPointerLock = function () {
       try {
         pendingLock = false;
-        trace("exit called");
+        lastGameExit = Date.now();
         if (scheduled) { clearTimeout(scheduled); scheduled = null; }
+        trace("exit called");
       } catch (e) {}
       return origExit.apply(this, arguments);
     };
     document.addEventListener("pointerlockchange", function () {
       if (document.pointerLockElement) {
-        everLocked = true; pendingLock = false; lockTries = 0;
-        trace("LOCKED");
-      } else if (everLocked) {
-        unlockedAt = Date.now();
-        trace("unlocked");
-      }
+        everLocked = true; pendingLock = false; lockTries = 0; trace("LOCKED");
+      } else { trace("unlocked"); }
     });
     document.addEventListener("pointerlockerror", function () {
       try {
         if (!pendingLock) return;
         lockTries++;
         trace("error #" + lockTries);
-        if (lockTries <= 2) {
-          var d = 1300 * lockTries;
+        if (lockTries <= 3) {
           setTimeout(function () {
             try { if (pendingLock && !document.pointerLockElement && lockTarget) lockTarget.requestPointerLock(); } catch (e) {}
-          }, d);
+          }, 900 * lockTries);
         } else { bindGestureRetry(); }
       } catch (e) {}
     });
-    function requestNow() {
-      var t = lockTarget;
-      if (!t) { try { t = document.querySelector("canvas"); } catch (e) {} }
-      if (t && !document.pointerLockElement) {
-        pendingLock = true; lockTries = 0;
-        try { t.requestPointerLock(); } catch (e) {}
-      }
-    }
     function bindGestureRetry() {
       if (gestureBound) return;
       gestureBound = true;
@@ -1045,25 +1033,56 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         gestureBound = false;
         window.removeEventListener("mousedown", go, true);
         window.removeEventListener("keydown", go, true);
-        if (pendingLock && !document.pointerLockElement) requestNow();
+        if (pendingLock && !document.pointerLockElement) tryLock(true);
       }
       window.addEventListener("mousedown", go, true);
       window.addEventListener("keydown", go, true);
     }
-    /* Leaving a menu (E / ESC) within 10s of losing the lock => re-lock.
-     * The window keeps this from firing at the title screen or on later E-opens. */
-    window.addEventListener("keydown", function (e) {
+    function cursorVisible() {
       try {
-        if (!everLocked || document.pointerLockElement) return;
-        if (e.code !== "KeyE" && e.code !== "Escape") return;
-        if (Date.now() - unlockedAt > 10000) return;
-        if (scheduled) clearTimeout(scheduled);
-        scheduled = setTimeout(function () {
-          scheduled = null;
-          try { if (!document.pointerLockElement) requestNow(); } catch (x) {}
-        }, 120);
-      } catch (x) {}
+        var els = [document.querySelector("canvas"), document.querySelector("._eaglercraftX_wrapper_element"), document.body];
+        for (var i = 0; i < els.length; i++) {
+          if (!els[i]) continue;
+          var cur = (els[i].style && els[i].style.cursor) || "";
+          if (!cur) { try { cur = getComputedStyle(els[i]).cursor || ""; } catch (e) { cur = ""; } }
+          if (cur && cur !== "none" && cur !== "auto") return true;
+        }
+        var ca = document.querySelector("canvas");
+        if (ca) {
+          var s2 = (ca.style && ca.style.cursor) || document.body.style.cursor || "";
+          if (s2 === "none") return false;
+        }
+      } catch (e) {}
+      return null;   // unknown
+    }
+    function tryLock(force) {
+      try {
+        if (document.pointerLockElement || !everLocked) return;
+        var cv = cursorVisible();
+        if (cv === true) return;                                  // definitely a menu
+        if (!force) {
+          if (Date.now() - lastGameExit < 250) return;            // game just opened a menu
+          if (cv === null && Date.now() - lastGameExit < 1500) return;
+        }
+        var t = lockTarget;
+        if (!t) t = document.querySelector("canvas");
+        if (!t) return;
+        pendingLock = true; lockTries = 0;
+        trace("auto-lock (" + (force ? "forced" : "input") + ")");
+        try { t.requestPointerLock(); } catch (e) {}
+      } catch (e) {}
+    }
+    function scheduleLock(ms, force) {
+      if (scheduled) clearTimeout(scheduled);
+      scheduled = setTimeout(function () { scheduled = null; tryLock(force); }, ms);
+    }
+    /* ANY input re-locks while unlocked in a world. E / ESC are menu-close keys: force. */
+    window.addEventListener("keydown", function (e) {
+      if (e.code === "KeyE" || e.code === "Escape") scheduleLock(130, true);
+      else tryLock(false);
     }, true);
+    window.addEventListener("mousedown", function () { tryLock(false); }, true);
+    window.addEventListener("wheel", function () { tryLock(false); }, { capture: true, passive: true });
 
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
     var slot = 0;
