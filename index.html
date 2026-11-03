@@ -989,18 +989,21 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
      *  - retries failed requests (Chrome ESC-cooldown / gesture rules)
      *  - re-locks when the user leaves a menu (E / ESC) shortly after losing the
      *    lock, and cancels if the game opens a menu in that window instead */
+    window.__ebsLockTrace = window.__ebsLockTrace || [];
+    function trace(s) { try { window.__ebsLockTrace.push(Math.round(performance.now()) + "ms " + s); if (window.__ebsLockTrace.length > 40) window.__ebsLockTrace.shift(); } catch (e) {} }
     var pendingLock = false, lockTries = 0, lockTarget = null, gestureBound = false;
     var everLocked = false, unlockedAt = 0, scheduled = null;
 
     var origRequest = Element.prototype.requestPointerLock;
     Element.prototype.requestPointerLock = function () {
-      try { lockTarget = this; pendingLock = true; lockTries = 0; } catch (e) {}
+      try { lockTarget = this; pendingLock = true; lockTries = 0; trace("game request (" + (this.tagName || "?") + ")"); } catch (e) {}
       return origRequest.apply(this, arguments);
     };
     var origExit = Document.prototype.exitPointerLock;
     Document.prototype.exitPointerLock = function () {
       try {
         pendingLock = false;
+        trace("exit called");
         if (scheduled) { clearTimeout(scheduled); scheduled = null; }
       } catch (e) {}
       return origExit.apply(this, arguments);
@@ -1008,14 +1011,17 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
     document.addEventListener("pointerlockchange", function () {
       if (document.pointerLockElement) {
         everLocked = true; pendingLock = false; lockTries = 0;
+        trace("LOCKED");
       } else if (everLocked) {
         unlockedAt = Date.now();
+        trace("unlocked");
       }
     });
     document.addEventListener("pointerlockerror", function () {
       try {
         if (!pendingLock) return;
         lockTries++;
+        trace("error #" + lockTries);
         if (lockTries <= 2) {
           var d = 1300 * lockTries;
           setTimeout(function () {
@@ -1107,7 +1113,12 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
   console.warn = function () { try { capture(Array.prototype.join.call(arguments, " ")); } catch (e) {} return owarn.apply(console, arguments); };
   console.error = function () { try { capture(Array.prototype.join.call(arguments, " ")); } catch (e) {} return oerr.apply(console, arguments); };
   function stats() {
-    var out = ["== boot tail =="];
+    var out = ["viewport: " + window.innerWidth + "x" + window.innerHeight
+      + " | lock: " + (document.pointerLockElement ? (document.pointerLockElement.tagName || "el") : "none")
+      + " | focused: " + document.hasFocus()];
+    out.push("== lock trace ==");
+    out = out.concat((window.__ebsLockTrace || []).slice(-8));
+    out.push("== boot tail ==");
     try { var l = window.__log || []; out = out.concat(l.slice(-14).map(String)); } catch (e) {}
     out.push("== mesh pool ==");
     try { out.push(JSON.stringify(window.__meshWorkerPool || null)); } catch (e) { out.push("unserializable"); }
@@ -1156,6 +1167,8 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
   function hashClick() {
     var m = /click=(\d+)[,.](\d+)/.exec(window.location.hash || "");
     if (m) ebsClick(parseInt(m[1], 10), parseInt(m[2], 10));
+    var r = /relclick=([0-9.]+),([0-9.]+)/.exec(window.location.hash || "");
+    if (r) ebsClick(Math.round(parseFloat(r[1]) * window.innerWidth), Math.round(parseFloat(r[2]) * window.innerHeight));
   }
   window.addEventListener("hashchange", hashClick);
   setTimeout(hashClick, 500);
