@@ -1084,6 +1084,35 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
     window.addEventListener("mousedown", function () { tryLock(false); }, true);
     window.addEventListener("wheel", function () { tryLock(false); }, { capture: true, passive: true });
 
+    /* Single-click protection: swallow duplicate mouse presses.
+     * This build can deliver the same physical click twice within a few ms, which
+     * double-fires break/place in creative. Duplicates under 35ms are blocked;
+     * genuinely fast clicking (>= ~60ms apart) still works. */
+    (function () {
+      var GUARD_MS = 35;
+      var last = { down: {}, up: {} };
+      function tooFast(family, kind, ev) {
+        try {
+          var b = ev.button | 0;
+          var k = family + b;
+          var now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+          var t = last[kind][k];
+          last[kind][k] = now;
+          return typeof t === "number" && (now - t) < GUARD_MS;
+        } catch (e) { return false; }
+      }
+      function check(ev, family, kind) {
+        if (tooFast(family, kind, ev)) {
+          try { ev.stopImmediatePropagation(); ev.stopPropagation(); ev.preventDefault(); } catch (x) {}
+          trace("dup " + family + kind + " b" + ev.button + " blocked");
+        }
+      }
+      window.addEventListener("mousedown", function (e) { check(e, "m", "down"); }, true);
+      window.addEventListener("mouseup", function (e) { check(e, "m", "up"); }, true);
+      try { window.addEventListener("pointerdown", function (e) { check(e, "p", "down"); }, true); } catch (x) {}
+      try { window.addEventListener("pointerup", function (e) { check(e, "p", "up"); }, true); } catch (x) {}
+    })();
+
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
     var slot = 0;
     var DIGITS = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","Digit7","Digit8","Digit9"];
