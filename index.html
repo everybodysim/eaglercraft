@@ -1134,6 +1134,31 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       try { window.__eaglerPerfEnabled = true; } catch (e) {}
     }
   } catch (e) {}
+  /* Hash-driven synthetic click bridge for automated testing: #click=X,Y */
+  function ebsClick(x, y) {
+    try {
+      var el = document.querySelector("canvas") || document.body;
+      var o = { clientX: x, clientY: y, screenX: x, screenY: y, pageX: x, pageY: y,
+                button: 0, buttons: 1, which: 1, view: window, bubbles: true, cancelable: true };
+      try { el.dispatchEvent(new PointerEvent("pointermove", { clientX: x, clientY: y, bubbles: true, pointerId: 1, pointerType: "mouse", isPrimary: true })); } catch (e) {}
+      el.dispatchEvent(new MouseEvent("mousemove", o));
+      try { el.dispatchEvent(new PointerEvent("pointerdown", { clientX: x, clientY: y, bubbles: true, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1 })); } catch (e) {}
+      el.dispatchEvent(new MouseEvent("mousedown", o));
+      setTimeout(function () {
+        try { el.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: 0 })); } catch (e) {}
+        el.dispatchEvent(new MouseEvent("mouseup", { clientX: x, clientY: y, button: 0, buttons: 0, which: 1, view: window, bubbles: true, cancelable: true }));
+        el.dispatchEvent(new MouseEvent("click", { clientX: x, clientY: y, button: 0, view: window, bubbles: true, cancelable: true }));
+      }, 50);
+      return true;
+    } catch (e) { return false; }
+  }
+  window.__ebsClick = ebsClick;
+  function hashClick() {
+    var m = /click=(\d+)[,.](\d+)/.exec(window.location.hash || "");
+    if (m) ebsClick(parseInt(m[1], 10), parseInt(m[2], 10));
+  }
+  window.addEventListener("hashchange", hashClick);
+  setTimeout(hashClick, 500);
   if (/[?&]diag/.test(window.location.search)) {
     var boot = setInterval(function () { if (document.body) { toggle(); clearInterval(boot); } }, 250);
   }
