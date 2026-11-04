@@ -775,8 +775,8 @@ Z12aSGrXHoYwXux247w3UelvBftWMZo0Wlbr3iVBUh8E3CfkL+41ZHFc3Qbaqn8YqSFHaWIH21A2KQEL
 			var appleUnknownMemory = memory <= 0 && /Mac|iPhone|iPad|iPod/.test(
 				(navigator.platform || "") + " " + (navigator.userAgent || ""));
 			if ((memory > 0 && memory <= 4) || cores <= 4) return 1;
-			if (appleUnknownMemory) return cores >= 8 ? 2 : 1;
-			return memory >= 8 && cores >= 8 ? 3 : 2;
+			if (appleUnknownMemory) return 1;
+			return memory >= 8 && cores >= 8 ? 2 : 1;
 		}
 		window.eaglercraftXOpts = {
 			container: "game_frame",
@@ -1217,14 +1217,16 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       }, true);
     })();
 
-    /* Long-session memory relief.
-     * The single-file page keeps ~200MB of inline payload text plus the decompressed
-     * wasm copies alive for the whole session. That JS-heap pressure is what makes
-     * the game stutter badly later and eventually die with a trap. Once the game has
-     * booted we drop every wasm payload (compiled modules stay; nothing re-reads the
-     * bytes afterwards), cap the boot log, and throttle the crash-journal writes. */
+    /* Long-session memory relief v2.
+     * Frees every inline payload string and the decompressed wasm copies once the
+     * game is up (compiled modules and decoded asset caches stay). Adds a heap
+     * watchdog relief pass and re-sweeps periodically and on world join. */
     (function () {
-      var released = false, lastJournal = 0, JOURNAL_KEY = "eaglercraft26.crashJournal.v2";
+      var lastJournal = 0, nextSweep = 0;
+      var JOURNAL_KEY = "eaglercraft26.crashJournal.v2";
+      var PAYLOADS = ["eag-inline-wasm-br", "eag-inline-mesh-wasm-br", "eag-inline-server-wasm-br",
+                      "eag-inline-assets", "eag-inline-sounds", "eag-inline-decoder"];
+      var wasmFreed = false;
 
       function gameIsUp() {
         try {
@@ -1236,35 +1238,48 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         } catch (e) {}
         return false;
       }
-
-      function release() {
-        if (released) return;
-        if (!gameIsUp()) { setTimeout(release, 5000); return; }
-        released = true;
-        try { if (typeof window.__eagReleaseInlineWasm === "function") window.__eagReleaseInlineWasm(); } catch (e) {}
-        try {
-          ["eag-inline-wasm-br", "eag-inline-mesh-wasm-br", "eag-inline-server-wasm-br"].forEach(function (id) {
-            var el = document.getElementById(id);
-            if (!el) return;
-            el.textContent = "";
-            if (el.parentNode) el.parentNode.removeChild(el);
-          });
-        } catch (e) {}
-        trace("memory: released inline wasm payloads");
-        setTimeout(release, 20000);   // title screen may load payloads slightly later
+      function sweep(reason) {
+        if (!gameIsUp()) return false;
+        var freedNodes = 0;
+        for (var i = 0; i < PAYLOADS.length; i++) {
+          var el = document.getElementById(PAYLOADS[i]);
+          if (el && el.textContent && el.textContent.length > 1024) { el.textContent = ""; freedNodes++; }
+        }
+        if (!wasmFreed) {
+          wasmFreed = true;
+          try { if (typeof window.__eagReleaseInlineWasm === "function") window.__eagReleaseInlineWasm(); } catch (e) {}
+        }
+        if (freedNodes) trace("memory sweep (" + reason + "): freed " + freedNodes + " payloads");
+        return true;
       }
-      released = false;
-      setTimeout(release, 15000);
-      /* second sweep: after the title screen has fully settled, drop payloads again */
-      setTimeout(function () { var r = released; released = false; release(); }, 60000);
+      var bootPoll = setInterval(function () {
+        if (sweep("boot")) {
+          clearInterval(bootPoll);
+          setTimeout(function () { sweep("settle"); }, 25000);
+        }
+      }, 6000);
+      /* periodic re-sweep, and on world join (pointer lock) */
+      setInterval(function () { sweep("periodic"); }, 60000);
+      document.addEventListener("pointerlockchange", function () {
+        if (document.pointerLockElement) setTimeout(function () { sweep("world"); }, 3000);
+      });
+
+      /* Heap watchdog: when the JS heap crosses 85%, do a relief pass immediately. */
+      setInterval(function () {
+        try {
+          var m = performance && performance.memory;
+          if (!m || !m.jsHeapSizeLimit) return;
+          if (m.usedJSHeapSize / m.jsHeapSizeLimit > 0.85) sweep("heap-pressure");
+        } catch (e) {}
+      }, 3000);
 
       /* Cap the boot log so it cannot grow for hours */
       setInterval(function () {
         try {
           var l = window.__log;
-          if (l && l.length > 2500) l.splice(0, l.length - 1500);
+          if (l && l.length > 2000) l.splice(0, l.length - 1200);
         } catch (e) {}
-      }, 5000);
+      }, 4000);
 
       /* Throttle crash-journal persistence (every 2s writes hitch the main thread) */
       try {
