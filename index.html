@@ -1206,15 +1206,20 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         if (!inFullscreen()) window.__ebsKbLocked = false;
       });
       document.addEventListener("pointerlockchange", function () {
-        if (document.pointerLockElement) setTimeout(arm, 40);
+        if (document.pointerLockElement) { window.__ebsInWorld = true; setTimeout(arm, 40); }
       });
-      /* If the user escaped fullscreen mid-world, re-arm on their next input. */
-      window.addEventListener("mousedown", function () {
-        if (!disabled && document.pointerLockElement && !inFullscreen()) setTimeout(arm, 0);
-      }, true);
-      window.addEventListener("keydown", function (e) {
-        if (!disabled && document.pointerLockElement && !inFullscreen() && !e.ctrlKey) setTimeout(arm, 0);
-      }, true);
+      /* Non-fullscreen safety: Chrome only hands us Ctrl+W while the page is
+       * fullscreen with Keyboard Lock. Outside that, a leave-confirmation keeps
+       * Ctrl+W from insta-closing the tab mid-world. */
+      window.addEventListener("beforeunload", function (e) {
+        try {
+          if (document.pointerLockElement || window.__ebsInWorld) {
+            e.preventDefault();
+            e.returnValue = "";
+            return "";
+          }
+        } catch (x) {}
+      });
     })();
 
     /* Long-session memory relief v2.
@@ -1305,15 +1310,15 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
      *    (Save and Quit to Title, then re-enter: that resets the world's memory). */
     (function () {
       var warned = false, hotCount = 0;
-      function banner(on, pct) {
+      function banner(on, pct, usedMB) {
         try {
           var el = document.getElementById("ebs-mem-warn");
           if (!on) { if (el) el.remove(); warned = false; return; }
-          if (el) { el.textContent = "MEMORY ALMOST FULL (" + pct + "%) - the game may crash. Press ESC > Save and Quit to Title, then re-enter your world to free memory."; return; }
+          if (el) { el.textContent = "MEMORY NEARLY FULL (" + usedMB + "MB, " + pct + "%) - lag spikes and crashes follow. Press ESC > Save and Quit to Title, then re-enter your world to free memory."; return; }
           el = document.createElement("div");
           el.id = "ebs-mem-warn";
           el.style.cssText = "position:fixed;left:0;right:0;bottom:0;padding:8px 12px;background:rgba(120,20,20,.92);color:#fff;font:13px/1.4 monospace;z-index:2147483646;text-align:center;";
-          el.textContent = "MEMORY ALMOST FULL (" + pct + "%) - the game may crash. Press ESC > Save and Quit to Title, then re-enter your world to free memory.";
+          el.textContent = "MEMORY NEARLY FULL (" + usedMB + "MB, " + pct + "%) - lag spikes and crashes follow. Press ESC > Save and Quit to Title, then re-enter your world to free memory.";
           (document.body || document.documentElement).appendChild(el);
           warned = true;
         } catch (e) {}
@@ -1341,10 +1346,12 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         try {
           var m = performance && performance.memory;
           if (!m || !m.jsHeapSizeLimit) return;
+          var usedMB = Math.round(m.usedJSHeapSize / 1048576);
           var pct = Math.round(100 * m.usedJSHeapSize / m.jsHeapSizeLimit);
-          if (pct >= 90) {
+          var hot = (usedMB >= 2300) || (pct >= 88);
+          if (hot) {
             hotCount++;
-            if (hotCount >= 2) banner(true, pct);
+            if (hotCount >= 2) banner(true, pct, usedMB);
             try {
               var PAY = ["eag-inline-wasm-br", "eag-inline-mesh-wasm-br", "eag-inline-server-wasm-br", "eag-inline-assets", "eag-inline-sounds", "eag-inline-decoder"];
               for (var i = 0; i < PAY.length; i++) { var el = document.getElementById(PAY[i]); if (el && el.textContent) el.textContent = ""; }
@@ -1352,10 +1359,42 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
             } catch (e) {}
           } else {
             hotCount = 0;
-            if (warned && pct < 85) banner(false);
+            if (warned && usedMB < 1900 && pct < 78) banner(false);
           }
         } catch (e) {}
       }, 3000);
+    })();
+
+    /* Menu-cursor alignment fix for scaled displays.
+     * The game hit-tests menus in backing-store pixels but the OS cursor is in
+     * CSS pixels. On displays with a device pixel ratio above 1 (Windows 125%
+     * scaling, hi-DPI laptops/tablets) the two disagree, so clicks land between
+     * the cursor and the center of the screen. Normalizing the canvas backing
+     * store to CSS pixels makes every coordinate space agree. Skipped entirely
+     * on dpr=1 displays. Add ?nomscalefix to disable. */
+    (function () {
+      var lastFix = 0;
+      function normalize() {
+        try {
+          if (/[?&]nomscalefix\b/.test(window.location.search)) return;
+          var dpr = window.devicePixelRatio || 1;
+          if (dpr === 1) return;
+          var c = document.querySelector("canvas");
+          if (!c) return;
+          var r = c.getBoundingClientRect();
+          if (!r.width || !r.height) return;
+          var w = Math.round(r.width), h = Math.round(r.height);
+          if (Math.abs(c.width - w) <= 1 && Math.abs(c.height - h) <= 1) return;
+          var t = Date.now();
+          if (t - lastFix < 1200) return;
+          lastFix = t;
+          c.width = w;
+          c.height = h;
+          trace("canvas normalized to css px " + w + "x" + h + " (dpr " + dpr + ")");
+        } catch (e) {}
+      }
+      window.addEventListener("resize", function () { setTimeout(normalize, 500); }, true);
+      setInterval(normalize, 2500);
     })();
 
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
