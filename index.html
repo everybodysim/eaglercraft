@@ -1312,6 +1312,7 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
     (function () {
       var hotCount = 0, deadline = 0, countdownTimer = null, cooldownUntil = 0, warned = false;
 
+      function fmt(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb + " MB"; }
       function bannerEl() { return document.getElementById("ebs-mem-warn"); }
       function removeBanner() {
         var el = bannerEl();
@@ -1385,7 +1386,7 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
           var m = performance && performance.memory;
           if (!m || !m.jsHeapSizeLimit) return;
           var usedMB = Math.round(m.usedJSHeapSize / 1048576);
-          var pct = Math.round(100 * m.usedJSHeapSize / m.jsHeapSizeLimit);
+          var pct = Math.min(100, Math.round(100 * m.usedJSHeapSize / m.jsHeapSizeLimit));
           var high = (usedMB >= 2000) || (pct >= 80);
           var critical = (usedMB >= 2600) || (pct >= 90);
           if (critical) {
@@ -1395,7 +1396,7 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
             hotCount = 0;
             if (deadline) return;
             if (high) {
-              paint("Memory high (" + usedMB + "MB, " + pct + "%). It will clear itself automatically if it gets worse.");
+              paint("Memory high (" + fmt(usedMB) + "). It will clear itself automatically if it gets worse.");
             } else if (warned && usedMB < 1700 && pct < 70) {
               removeBanner();
             }
