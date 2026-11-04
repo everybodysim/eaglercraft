@@ -1302,32 +1302,70 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       } catch (e) {}
     })();
 
-    /* Crash hardening:
-     * 1) Under memory pressure Chrome can drop the WebGL context ("context lost").
-     *    If nobody calls preventDefault on webglcontextlost the context is gone for
-     *    good, which is one way this build dies late in a session. Allow recovery.
-     * 2) Warn before the heap is exhausted, with the one thing the player can do
-     *    (Save and Quit to Title, then re-enter: that resets the world's memory). */
+    /* Self-clearing memory guard.
+     * No more "go to title and back": when the heap reaches crash territory the
+     * page now clears itself with a short visible countdown and reloads straight
+     * back into the game (worlds live in storage and autosave as you play, so you
+     * come back at your last autosave instead of hitting a SIGILL crash mid-write,
+     * which is what can damage a world). Cancel is available if you need a moment.
+     * Also keeps the WebGL context-loss recovery from the crash hardening pass. */
     (function () {
-      var warned = false, hotCount = 0;
-      function banner(on, pct, usedMB) {
-        try {
-          var el = document.getElementById("ebs-mem-warn");
-          if (!on) { if (el) el.remove(); warned = false; return; }
-          if (el) { el.textContent = "MEMORY NEARLY FULL (" + usedMB + "MB, " + pct + "%) - lag spikes and crashes follow. Press ESC > Save and Quit to Title, then re-enter your world to free memory."; return; }
+      var hotCount = 0, deadline = 0, countdownTimer = null, cooldownUntil = 0, warned = false;
+
+      function bannerEl() { return document.getElementById("ebs-mem-warn"); }
+      function removeBanner() {
+        var el = bannerEl();
+        if (el) el.remove();
+        warned = false;
+      }
+      function paint(html) {
+        var el = bannerEl();
+        if (!el) {
           el = document.createElement("div");
           el.id = "ebs-mem-warn";
-          el.style.cssText = "position:fixed;left:0;right:0;bottom:0;padding:8px 12px;background:rgba(120,20,20,.92);color:#fff;font:13px/1.4 monospace;z-index:2147483646;text-align:center;";
-          el.textContent = "MEMORY NEARLY FULL (" + usedMB + "MB, " + pct + "%) - lag spikes and crashes follow. Press ESC > Save and Quit to Title, then re-enter your world to free memory.";
+          el.style.cssText = "position:fixed;left:0;right:0;bottom:0;padding:9px 12px;background:rgba(140,25,25,.94);color:#fff;font:13px/1.45 monospace;z-index:2147483646;text-align:center;";
           (document.body || document.documentElement).appendChild(el);
           warned = true;
-        } catch (e) {}
+        }
+        el.innerHTML = html;
       }
+      function startCountdown() {
+        if (deadline) return;
+        deadline = Date.now() + 12000;
+        paint("");
+        var btn = document.createElement("button");
+        btn.textContent = "Cancel";
+        btn.style.cssText = "margin-left:12px;padding:2px 10px;font:inherit;cursor:pointer;";
+        btn.onclick = function () {
+          deadline = 0;
+          if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+          cooldownUntil = Date.now() + 600000;
+          removeBanner();
+          trace("memory auto-clear cancelled for 10 min");
+        };
+        function tick() {
+          var left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+          var el = bannerEl();
+          if (!el) return;
+          el.textContent = "MEMORY FULL - clearing automatically in " + left + "s (world resumes from its last autosave). ";
+          el.appendChild(btn);
+          if (left <= 0) {
+            clearInterval(countdownTimer);
+            countdownTimer = null;
+            deadline = 0;
+            trace("memory auto-clear: reloading");
+            try { window.location.reload(); } catch (e) {}
+          }
+        }
+        tick();
+        countdownTimer = setInterval(tick, 500);
+      }
+
       /* WebGL context loss: allow the browser to restore it instead of dying. */
       function hookCanvas() {
         try {
           var c = document.querySelector("canvas");
-          if (!c) { setTimeout(hookCanvas, 2000); return; }
+          if (!c) return;
           if (c.__ebsCtxHooked) return;
           c.__ebsCtxHooked = true;
           c.addEventListener("webglcontextlost", function (e) {
@@ -1341,25 +1379,34 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       }
       hookCanvas();
       setInterval(hookCanvas, 10000);
-      /* Heap pressure: warn + last-resort relief at 90%. */
+
       setInterval(function () {
         try {
           var m = performance && performance.memory;
           if (!m || !m.jsHeapSizeLimit) return;
           var usedMB = Math.round(m.usedJSHeapSize / 1048576);
           var pct = Math.round(100 * m.usedJSHeapSize / m.jsHeapSizeLimit);
-          var hot = (usedMB >= 2300) || (pct >= 88);
-          if (hot) {
+          var high = (usedMB >= 2000) || (pct >= 80);
+          var critical = (usedMB >= 2600) || (pct >= 90);
+          if (critical) {
             hotCount++;
-            if (hotCount >= 2) banner(true, pct, usedMB);
+            if (hotCount >= 2 && Date.now() > cooldownUntil) startCountdown();
+          } else {
+            hotCount = 0;
+            if (deadline) return;
+            if (high) {
+              paint("Memory high (" + usedMB + "MB, " + pct + "%). It will clear itself automatically if it gets worse.");
+            } else if (warned && usedMB < 1700 && pct < 70) {
+              removeBanner();
+            }
+          }
+          if (critical || high) {
+            /* relief pass: anything page-held gets dropped now */
             try {
               var PAY = ["eag-inline-wasm-br", "eag-inline-mesh-wasm-br", "eag-inline-server-wasm-br", "eag-inline-assets", "eag-inline-sounds", "eag-inline-decoder"];
               for (var i = 0; i < PAY.length; i++) { var el = document.getElementById(PAY[i]); if (el && el.textContent) el.textContent = ""; }
-              if (window.__log && window.__log.length > 600) window.__log.splice(0, window.__log.length - 400);
+              if (window.__log && window.__log.length > 500) window.__log.splice(0, window.__log.length - 300);
             } catch (e) {}
-          } else {
-            hotCount = 0;
-            if (warned && usedMB < 1900 && pct < 78) banner(false);
           }
         } catch (e) {}
       }, 3000);
