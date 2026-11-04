@@ -774,9 +774,9 @@ Z12aSGrXHoYwXux247w3UelvBftWMZo0Wlbr3iVBUh8E3CfkL+41ZHFc3Qbaqn8YqSFHaWIH21A2KQEL
 			var cores = Number(navigator.hardwareConcurrency) || 4;
 			var appleUnknownMemory = memory <= 0 && /Mac|iPhone|iPad|iPod/.test(
 				(navigator.platform || "") + " " + (navigator.userAgent || ""));
-			if ((memory > 0 && memory <= 4) || cores <= 4) return 2;
-			if (appleUnknownMemory) return cores >= 8 ? 3 : 2;
-			return memory >= 8 && cores >= 8 ? 5 : 3;
+			if ((memory > 0 && memory <= 4) || cores <= 4) return 1;
+			if (appleUnknownMemory) return cores >= 8 ? 2 : 1;
+			return memory >= 8 && cores >= 8 ? 3 : 2;
 		}
 		window.eaglercraftXOpts = {
 			container: "game_frame",
@@ -1215,6 +1215,71 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       window.addEventListener("keydown", function (e) {
         if (!disabled && document.pointerLockElement && !inFullscreen() && !e.ctrlKey) setTimeout(arm, 0);
       }, true);
+    })();
+
+    /* Long-session memory relief.
+     * The single-file page keeps ~200MB of inline payload text plus the decompressed
+     * wasm copies alive for the whole session. That JS-heap pressure is what makes
+     * the game stutter badly later and eventually die with a trap. Once the game has
+     * booted we drop every wasm payload (compiled modules stay; nothing re-reads the
+     * bytes afterwards), cap the boot log, and throttle the crash-journal writes. */
+    (function () {
+      var released = false, lastJournal = 0, JOURNAL_KEY = "eaglercraft26.crashJournal.v2";
+
+      function gameIsUp() {
+        try {
+          var logs = window.__log || [];
+          for (var i = Math.max(0, logs.length - 500); i < logs.length; i++) {
+            var s = String(logs[i]);
+            if (s.indexOf("eaglercraftx is starting") >= 0 || s.indexOf("Render thread/INFO") >= 0) return true;
+          }
+        } catch (e) {}
+        return false;
+      }
+
+      function release() {
+        if (released) return;
+        if (!gameIsUp()) { setTimeout(release, 5000); return; }
+        released = true;
+        try { if (typeof window.__eagReleaseInlineWasm === "function") window.__eagReleaseInlineWasm(); } catch (e) {}
+        try {
+          ["eag-inline-wasm-br", "eag-inline-mesh-wasm-br", "eag-inline-server-wasm-br"].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = "";
+            if (el.parentNode) el.parentNode.removeChild(el);
+          });
+        } catch (e) {}
+        trace("memory: released inline wasm payloads");
+        setTimeout(release, 20000);   // title screen may load payloads slightly later
+      }
+      released = false;
+      setTimeout(release, 15000);
+      /* second sweep: after the title screen has fully settled, drop payloads again */
+      setTimeout(function () { var r = released; released = false; release(); }, 60000);
+
+      /* Cap the boot log so it cannot grow for hours */
+      setInterval(function () {
+        try {
+          var l = window.__log;
+          if (l && l.length > 2500) l.splice(0, l.length - 1500);
+        } catch (e) {}
+      }, 5000);
+
+      /* Throttle crash-journal persistence (every 2s writes hitch the main thread) */
+      try {
+        var origSet = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) {
+          try {
+            if (k === JOURNAL_KEY) {
+              var t = Date.now();
+              if (t - lastJournal < 20000) return;
+              lastJournal = t;
+            }
+          } catch (e) {}
+          return origSet.apply(this, arguments);
+        };
+      } catch (e) {}
     })();
 
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
