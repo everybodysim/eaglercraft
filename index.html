@@ -1288,13 +1288,74 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
           try {
             if (k === JOURNAL_KEY) {
               var t = Date.now();
-              if (t - lastJournal < 20000) return;
+              if (t - lastJournal < 60000) return;
               lastJournal = t;
             }
           } catch (e) {}
           return origSet.apply(this, arguments);
         };
       } catch (e) {}
+    })();
+
+    /* Crash hardening:
+     * 1) Under memory pressure Chrome can drop the WebGL context ("context lost").
+     *    If nobody calls preventDefault on webglcontextlost the context is gone for
+     *    good, which is one way this build dies late in a session. Allow recovery.
+     * 2) Warn before the heap is exhausted, with the one thing the player can do
+     *    (Save and Quit to Title, then re-enter: that resets the world's memory). */
+    (function () {
+      var warned = false, hotCount = 0;
+      function banner(on, pct) {
+        try {
+          var el = document.getElementById("ebs-mem-warn");
+          if (!on) { if (el) el.remove(); warned = false; return; }
+          if (el) { el.textContent = "MEMORY ALMOST FULL (" + pct + "%) - the game may crash. Press ESC > Save and Quit to Title, then re-enter your world to free memory."; return; }
+          el = document.createElement("div");
+          el.id = "ebs-mem-warn";
+          el.style.cssText = "position:fixed;left:0;right:0;bottom:0;padding:8px 12px;background:rgba(120,20,20,.92);color:#fff;font:13px/1.4 monospace;z-index:2147483646;text-align:center;";
+          el.textContent = "MEMORY ALMOST FULL (" + pct + "%) - the game may crash. Press ESC > Save and Quit to Title, then re-enter your world to free memory.";
+          (document.body || document.documentElement).appendChild(el);
+          warned = true;
+        } catch (e) {}
+      }
+      /* WebGL context loss: allow the browser to restore it instead of dying. */
+      function hookCanvas() {
+        try {
+          var c = document.querySelector("canvas");
+          if (!c) { setTimeout(hookCanvas, 2000); return; }
+          if (c.__ebsCtxHooked) return;
+          c.__ebsCtxHooked = true;
+          c.addEventListener("webglcontextlost", function (e) {
+            try { e.preventDefault(); } catch (x) {}
+            trace("WEBGL CONTEXT LOST (allowing restore)");
+          }, false);
+          c.addEventListener("webglcontextrestored", function () {
+            trace("WEBGL CONTEXT RESTORED");
+          }, false);
+        } catch (e) {}
+      }
+      hookCanvas();
+      setInterval(hookCanvas, 10000);
+      /* Heap pressure: warn + last-resort relief at 90%. */
+      setInterval(function () {
+        try {
+          var m = performance && performance.memory;
+          if (!m || !m.jsHeapSizeLimit) return;
+          var pct = Math.round(100 * m.usedJSHeapSize / m.jsHeapSizeLimit);
+          if (pct >= 90) {
+            hotCount++;
+            if (hotCount >= 2) banner(true, pct);
+            try {
+              var PAY = ["eag-inline-wasm-br", "eag-inline-mesh-wasm-br", "eag-inline-server-wasm-br", "eag-inline-assets", "eag-inline-sounds", "eag-inline-decoder"];
+              for (var i = 0; i < PAY.length; i++) { var el = document.getElementById(PAY[i]); if (el && el.textContent) el.textContent = ""; }
+              if (window.__log && window.__log.length > 600) window.__log.splice(0, window.__log.length - 400);
+            } catch (e) {}
+          } else {
+            hotCount = 0;
+            if (warned && pct < 85) banner(false);
+          }
+        } catch (e) {}
+      }, 3000);
     })();
 
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
