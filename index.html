@@ -1310,7 +1310,7 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
      * which is what can damage a world). Cancel is available if you need a moment.
      * Also keeps the WebGL context-loss recovery from the crash hardening pass. */
     (function () {
-      var hotCount = 0, deadline = 0, countdownTimer = null, cooldownUntil = 0, warned = false;
+      var hotCount = 0, warned = false;
 
       function fmt(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb + " MB"; }
       var lastLockAt = 0;
@@ -1335,38 +1335,6 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         }
         el.innerHTML = html;
       }
-      function startCountdown() {
-        if (deadline) return;
-        deadline = Date.now() + 12000;
-        paint("");
-        var btn = document.createElement("button");
-        btn.textContent = "Cancel";
-        btn.style.cssText = "margin-left:12px;padding:2px 10px;font:inherit;cursor:pointer;";
-        btn.onclick = function () {
-          deadline = 0;
-          if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
-          cooldownUntil = Date.now() + 600000;
-          removeBanner();
-          trace("memory auto-clear cancelled for 10 min");
-        };
-        function tick() {
-          var left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-          var el = bannerEl();
-          if (!el) return;
-          el.textContent = "MEMORY FULL - clearing automatically in " + left + "s (world resumes from its last autosave). ";
-          el.appendChild(btn);
-          if (left <= 0) {
-            clearInterval(countdownTimer);
-            countdownTimer = null;
-            deadline = 0;
-            trace("memory auto-clear: reloading");
-            try { window.location.reload(); } catch (e) {}
-          }
-        }
-        tick();
-        countdownTimer = setInterval(tick, 500);
-      }
-
       /* WebGL context loss: allow the browser to restore it instead of dying. */
       function hookCanvas() {
         try {
@@ -1392,10 +1360,6 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
           if (!m || !m.jsHeapSizeLimit) return;
           if (!inPlay()) {
             hotCount = 0;
-            if (deadline) {
-              deadline = 0;
-              if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
-            }
             removeBanner();
             return;
           }
@@ -1405,12 +1369,13 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
           var critical = (usedMB >= 2600) || (pct >= 90);
           if (critical) {
             hotCount++;
-            if (hotCount >= 2 && Date.now() > cooldownUntil) startCountdown();
+            if (hotCount >= 2) {
+              paint("Memory very high (" + fmt(usedMB) + "). If the game starts stuttering, lower Render Distance in Options.");
+            }
           } else {
             hotCount = 0;
-            if (deadline) return;
             if (high) {
-              paint("Memory high (" + fmt(usedMB) + "). It will clear itself automatically if it gets worse.");
+              paint("Memory high (" + fmt(usedMB) + "). Consider lowering Render Distance in Options.");
             } else if (warned && usedMB < 1700 && pct < 70) {
               removeBanner();
             }
