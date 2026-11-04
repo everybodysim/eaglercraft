@@ -1313,6 +1313,11 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       var hotCount = 0, deadline = 0, countdownTimer = null, cooldownUntil = 0, warned = false;
 
       function fmt(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb + " MB"; }
+      var lastLockAt = 0;
+      document.addEventListener("pointerlockchange", function () {
+        if (document.pointerLockElement) lastLockAt = Date.now();
+      });
+      function inPlay() { return !!document.pointerLockElement || (Date.now() - lastLockAt) < 120000; }
       function bannerEl() { return document.getElementById("ebs-mem-warn"); }
       function removeBanner() {
         var el = bannerEl();
@@ -1385,6 +1390,15 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         try {
           var m = performance && performance.memory;
           if (!m || !m.jsHeapSizeLimit) return;
+          if (!inPlay()) {
+            hotCount = 0;
+            if (deadline) {
+              deadline = 0;
+              if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+            }
+            removeBanner();
+            return;
+          }
           var usedMB = Math.round(m.usedJSHeapSize / 1048576);
           var pct = Math.min(100, Math.round(100 * m.usedJSHeapSize / m.jsHeapSizeLimit));
           var high = (usedMB >= 2000) || (pct >= 80);
