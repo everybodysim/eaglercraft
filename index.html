@@ -774,9 +774,9 @@ Z12aSGrXHoYwXux247w3UelvBftWMZo0Wlbr3iVBUh8E3CfkL+41ZHFc3Qbaqn8YqSFHaWIH21A2KQEL
 			var cores = Number(navigator.hardwareConcurrency) || 4;
 			var appleUnknownMemory = memory <= 0 && /Mac|iPhone|iPad|iPod/.test(
 				(navigator.platform || "") + " " + (navigator.userAgent || ""));
-			if ((memory > 0 && memory <= 4) || cores <= 4) return 1;
-			if (appleUnknownMemory) return cores >= 8 ? 2 : 1;
-			return memory >= 8 && cores >= 8 ? 3 : 2;
+			if ((memory > 0 && memory <= 4) || cores <= 4) return 2;
+			if (appleUnknownMemory) return cores >= 8 ? 3 : 2;
+			return memory >= 8 && cores >= 8 ? 5 : 3;
 		}
 		window.eaglercraftXOpts = {
 			container: "game_frame",
@@ -1110,6 +1110,43 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
           lastDown.p[b] = t;
         }, true);
       } catch (x) {}
+    })();
+
+    /* Silent one-shot memory release: once the game is up, drop the wasm payload
+     * strings and their decompressed copies (compiled modules stay; nothing
+     * re-reads the bytes after boot). Costs nothing, frees a few hundred MB so
+     * the extra mesh workers don't push the heap toward a crash. */
+    (function () {
+      var done = false;
+      function up() {
+        try {
+          var l = window.__log || [];
+          for (var i = Math.max(0, l.length - 400); i < l.length; i++) {
+            var s = String(l[i]);
+            if (s.indexOf("Render thread/INFO") >= 0 || s.indexOf("eaglercraftx is starting") >= 0) return true;
+          }
+        } catch (e) {}
+        return false;
+      }
+      function sweep() {
+        if (done) return;
+        if (!up()) return;
+        done = true;
+        try { if (typeof window.__eagReleaseInlineWasm === "function") window.__eagReleaseInlineWasm(); } catch (e) {}
+        try {
+          ["eag-inline-wasm-br", "eag-inline-mesh-wasm-br", "eag-inline-server-wasm-br"].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.textContent = "";
+          });
+        } catch (e) {}
+        trace("silent memory release done");
+      }
+      var t = setInterval(function () { sweep(); if (done) clearInterval(t); }, 5000);
+      setTimeout(function () { if (!done) sweep(); }, 90000);
+      /* keep the boot log from growing unbounded */
+      setInterval(function () {
+        try { var l = window.__log; if (l && l.length > 2000) l.splice(0, l.length - 1200); } catch (e) {}
+      }, 10000);
     })();
 
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
