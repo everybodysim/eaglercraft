@@ -1159,6 +1159,82 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       } catch (e) {}
     })();
 
+    /* Menu cursor alignment, every display size and scaling factor:
+     * the game hit-tests menus in canvas backing-store pixels while the visible
+     * cursor lives in CSS pixels. On scaled displays and oversized canvases the
+     * two disagree, so clicks land toward the center. Forcing the backing store
+     * to the CSS size makes both spaces identical. ?nomscalefix disables. */
+    (function () {
+      var lastFix = 0;
+      function normalize() {
+        try {
+          if (/[?&]nomscalefix\b/.test(window.location.search)) return;
+          var c = document.querySelector("canvas");
+          if (!c) return;
+          var r = c.getBoundingClientRect();
+          if (!r.width || !r.height) return;
+          var w = Math.round(r.width), h = Math.round(r.height);
+          if (Math.abs(c.width - w) <= 1 && Math.abs(c.height - h) <= 1) return;
+          var t = Date.now();
+          if (t - lastFix < 1000) return;
+          lastFix = t;
+          c.width = w;
+          c.height = h;
+          trace("canvas normalized " + w + "x" + h);
+        } catch (e) {}
+      }
+      window.addEventListener("resize", function () { setTimeout(normalize, 400); }, true);
+      setInterval(normalize, 2000);
+    })();
+
+    /* Ctrl+W protection: fullscreen + Keyboard Lock hands reserved browser
+     * shortcuts to the game. Outside fullscreen a leave-confirmation stops an
+     * accidental close instead. ?nofs disables the fullscreen arm. */
+    (function () {
+      var disabled = /[?&]nofs\b/.test(window.location.search);
+      window.__ebsKbLocked = false;
+      function inFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+      function arm() {
+        try {
+          if (disabled) return;
+          var el = document.documentElement;
+          var req = el.requestFullscreen || el.webkitRequestFullscreen;
+          var go = function () {
+            try {
+              if (navigator.keyboard && typeof navigator.keyboard.lock === "function") {
+                navigator.keyboard.lock().then(function () {
+                  window.__ebsKbLocked = true;
+                  trace("keyboard LOCKED");
+                }).catch(function () { trace("keyboard lock denied"); });
+              }
+            } catch (e) {}
+          };
+          if (inFullscreen()) { go(); return; }
+          if (!req) return;
+          try {
+            var p = el.requestFullscreen ? el.requestFullscreen({ navigationUI: "hide" }) : req.call(el);
+            if (p && typeof p.then === "function") p.then(go).catch(function () { trace("fullscreen denied"); });
+            else { setTimeout(function () { if (inFullscreen()) go(); }, 120); }
+          } catch (e) {}
+        } catch (e) {}
+      }
+      document.addEventListener("fullscreenchange", function () {
+        if (!inFullscreen()) window.__ebsKbLocked = false;
+      });
+      document.addEventListener("pointerlockchange", function () {
+        if (document.pointerLockElement) { window.__ebsInWorld = true; setTimeout(arm, 40); }
+      });
+      window.addEventListener("beforeunload", function (e) {
+        try {
+          if (document.pointerLockElement || window.__ebsInWorld) {
+            e.preventDefault();
+            e.returnValue = "";
+            return "";
+          }
+        } catch (x) {}
+      });
+    })();
+
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
     var slot = 0;
     var DIGITS = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","Digit7","Digit8","Digit9"];
