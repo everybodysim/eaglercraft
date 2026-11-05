@@ -1060,10 +1060,8 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         if (document.pointerLockElement || !everLocked) return;
         var cv = cursorVisible();
         if (cv === true) return;                                  // definitely a menu
-        if (!force) {
-          if (Date.now() - lastGameExit < 250) return;            // game just opened a menu
-          if (cv === null && Date.now() - lastGameExit < 1500) return;
-        }
+        if (!force && cv !== false) return;                       // unsure => don't grab
+        if (!force && Date.now() - lastGameExit < 400) return;    // game just opened a menu
         var t = lockTarget;
         if (!t) t = document.querySelector("canvas");
         if (!t) return;
@@ -1084,174 +1082,34 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
     window.addEventListener("mousedown", function () { tryLock(false); }, true);
     window.addEventListener("wheel", function () { tryLock(false); }, { capture: true, passive: true });
 
-    /* Single-click protection v2.
-     * The old 35ms blocker was eating real clicks when the game double-fired a full
-     * press pair. This version never blocks a release, only blocks an *impossible*
-     * duplicate press (< 8ms, cannot be human), and adds a stuck-button watchdog:
-     * if the game was told a button went down and no release ever reached it while
-     * the physical button is up, it force-releases so break/place can't latch. */
+    /* Single-click protection: block only impossible duplicate presses (< 8ms,
+     * faster than any human). Passively observes; never injects input, never
+     * blocks a release. */
     (function () {
       var DOWN_GUARD_MS = 8;
       var lastDown = { m: {}, p: {} };
-      var gameDown = {};       // button -> timestamp a down was delivered to the game
-      var physDown = {};       // button -> physical state
-
       function now() {
         return (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
       }
-      function target() {
-        try { return document.querySelector("canvas") || document.body; } catch (e) { return document.body; }
-      }
-      function sendUp(button, viaPointer) {
-        try {
-          var el = target();
-          var ev = null;
-          if (viaPointer && typeof PointerEvent !== "undefined") {
-            try { el.dispatchEvent(new PointerEvent("pointerup", { button: button, buttons: 0, bubbles: true, pointerId: 1, pointerType: "mouse", isPrimary: true })); } catch (e) {}
-          }
-          el.dispatchEvent(new MouseEvent("mouseup", { button: button, buttons: 0, which: button + 1, view: window, bubbles: true, cancelable: true }));
-          trace("watchdog released b" + button);
-        } catch (e) {}
-      }
-
       window.addEventListener("mousedown", function (e) {
         var b = e.button | 0, t = now();
         if ((t - (lastDown.m[b] || -1e9)) < DOWN_GUARD_MS) {
           try { e.stopImmediatePropagation(); e.stopPropagation(); e.preventDefault(); } catch (x) {}
-          sendUp(b, false);       // never leave a phantom press latched
           trace("dup down b" + b + " blocked");
           return;
         }
         lastDown.m[b] = t;
-        gameDown[b] = t;
-        physDown[b] = true;
       }, true);
-
-      window.addEventListener("mouseup", function (e) {
-        var b = e.button | 0;
-        delete physDown[b];
-        delete gameDown[b];
-      }, true);
-
       try {
         window.addEventListener("pointerdown", function (e) {
           var b = e.button | 0, t = now();
           if ((t - (lastDown.p[b] || -1e9)) < DOWN_GUARD_MS) {
             try { e.stopImmediatePropagation(); e.stopPropagation(); e.preventDefault(); } catch (x) {}
-            trace("dup pointerdown b" + b + " blocked");
             return;
           }
           lastDown.p[b] = t;
         }, true);
-        window.addEventListener("pointerup", function () {}, true);
       } catch (x) {}
-
-      /* Watchdog: a down the game saw but never got a release for, while the mouse is
-       * physically not held, would make break/place auto-repeat ("keeps clicking"). */
-      setInterval(function () {
-        try {
-          for (var k in gameDown) {
-            if (!Object.prototype.hasOwnProperty.call(gameDown, k)) continue;
-            var b = k | 0;
-            if (physDown[b]) continue;                       // genuinely held
-            if ((now() - gameDown[b]) > 400) {
-              delete gameDown[b];
-              sendUp(b, true);
-            }
-          }
-        } catch (e) {}
-      }, 250);
-    })();
-
-    /* Ctrl+W / reserved browser shortcut protection.
-     * Chrome pages cannot block Ctrl+W or Ctrl+Space with preventDefault. The only
-     * real fix is the Keyboard Lock API, which works while the page is fullscreen:
-     * the page then receives EVERY key and the browser stops acting on Ctrl+W,
-     * Ctrl+Space (IME), Ctrl+T and similar. We arm it automatically when a world
-     * takes pointer lock, using that click as the required user gesture.
-     * Add ?nofs to the URL to keep it off. F11, or holding Esc ~2s, exits. */
-    (function () {
-      var disabled = /[?&]nofs\b/.test(window.location.search);
-      window.__ebsKbLocked = false;
-      function inFullscreen() {
-        return !!(document.fullscreenElement || document.webkitFullscreenElement);
-      }
-      function arm() {
-        try {
-          if (disabled) return;
-          var el = document.documentElement;
-          var req = el.requestFullscreen || el.webkitRequestFullscreen;
-          var go = function () {
-            try {
-              if (navigator.keyboard && typeof navigator.keyboard.lock === "function") {
-                navigator.keyboard.lock().then(function () {
-                  window.__ebsKbLocked = true;
-                  trace("keyboard LOCKED (ctrl+w safe)");
-                }).catch(function () { trace("keyboard lock denied"); });
-              } else {
-                trace("keyboard.lock unsupported (Firefox/Safari)");
-              }
-            } catch (e) {}
-          };
-          if (inFullscreen()) { go(); return; }
-          if (!req) return;
-          try {
-            var p = el.requestFullscreen ? el.requestFullscreen({ navigationUI: "hide" }) : req.call(el);
-            if (p && typeof p.then === "function") p.then(go).catch(function () { trace("fullscreen denied"); });
-            else { setTimeout(function () { if (inFullscreen()) go(); }, 120); }
-          } catch (e) { trace("fullscreen threw"); }
-        } catch (e) {}
-      }
-      document.addEventListener("fullscreenchange", function () {
-        if (!inFullscreen()) window.__ebsKbLocked = false;
-      });
-      document.addEventListener("pointerlockchange", function () {
-        if (document.pointerLockElement) { window.__ebsInWorld = true; setTimeout(arm, 40); }
-      });
-      /* Non-fullscreen safety: Chrome only hands us Ctrl+W while the page is
-       * fullscreen with Keyboard Lock. Outside that, a leave-confirmation keeps
-       * Ctrl+W from insta-closing the tab mid-world. */
-      window.addEventListener("beforeunload", function (e) {
-        try {
-          if (document.pointerLockElement || window.__ebsInWorld) {
-            e.preventDefault();
-            e.returnValue = "";
-            return "";
-          }
-        } catch (x) {}
-      });
-    })();
-
-    /* Menu-cursor alignment fix for scaled displays.
-     * The game hit-tests menus in backing-store pixels but the OS cursor is in
-     * CSS pixels. On displays with a device pixel ratio above 1 (Windows 125%
-     * scaling, hi-DPI laptops/tablets) the two disagree, so clicks land between
-     * the cursor and the center of the screen. Normalizing the canvas backing
-     * store to CSS pixels makes every coordinate space agree. Skipped entirely
-     * on dpr=1 displays. Add ?nomscalefix to disable. */
-    (function () {
-      var lastFix = 0;
-      function normalize() {
-        try {
-          if (/[?&]nomscalefix\b/.test(window.location.search)) return;
-          var dpr = window.devicePixelRatio || 1;
-          if (dpr === 1) return;
-          var c = document.querySelector("canvas");
-          if (!c) return;
-          var r = c.getBoundingClientRect();
-          if (!r.width || !r.height) return;
-          var w = Math.round(r.width), h = Math.round(r.height);
-          if (Math.abs(c.width - w) <= 1 && Math.abs(c.height - h) <= 1) return;
-          var t = Date.now();
-          if (t - lastFix < 1200) return;
-          lastFix = t;
-          c.width = w;
-          c.height = h;
-          trace("canvas normalized to css px " + w + "x" + h + " (dpr " + dpr + ")");
-        } catch (e) {}
-      }
-      window.addEventListener("resize", function () { setTimeout(normalize, 500); }, true);
-      setInterval(normalize, 2500);
     })();
 
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
@@ -1330,12 +1188,6 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
   window.addEventListener("keydown", function (e) {
     if (e.code === "F8") { try { e.preventDefault(); } catch (x) {} toggle(); }
   }, true);
-  try {
-    if (/[?&]diag/.test(window.location.search) && !/perfdebug/.test(window.location.search)) {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search + "&perfdebug");
-      try { window.__eaglerPerfEnabled = true; } catch (e) {}
-    }
-  } catch (e) {}
   /* Hash-driven synthetic click bridge for automated testing: #click=X,Y */
   function ebsClick(x, y) {
     try {
