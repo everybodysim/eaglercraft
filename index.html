@@ -1159,32 +1159,36 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       } catch (e) {}
     })();
 
-    /* Menu cursor alignment, every display size and scaling factor:
-     * the game hit-tests menus in canvas backing-store pixels while the visible
-     * cursor lives in CSS pixels. On scaled displays and oversized canvases the
-     * two disagree, so clicks land toward the center. Forcing the backing store
-     * to the CSS size makes both spaces identical. ?nomscalefix disables. */
+    /* Display sync for menu clicking.
+     * The engine caches the canvas/window dimensions it saw when it started and
+     * does not reliably notice later changes: going fullscreen, maximizing, or
+     * moving to a larger monitor. Its menu hit-testing then divides cursor
+     * position by stale dimensions, so clicks land between the cursor and the
+     * screen center -- worst on big resolutions. Instead of touching the canvas
+     * ourselves, nudge the engine's own resize handler whenever the display
+     * actually changes and right after boot so it recomputes its own numbers. */
     (function () {
-      var lastFix = 0;
-      function normalize() {
+      var last = 0;
+      function nudge(reason) {
+        var t = Date.now();
+        if (t - last < 1200) return;
+        last = t;
         try {
-          if (/[?&]nomscalefix\b/.test(window.location.search)) return;
-          var c = document.querySelector("canvas");
-          if (!c) return;
-          var r = c.getBoundingClientRect();
-          if (!r.width || !r.height) return;
-          var w = Math.round(r.width), h = Math.round(r.height);
-          if (Math.abs(c.width - w) <= 1 && Math.abs(c.height - h) <= 1) return;
-          var t = Date.now();
-          if (t - lastFix < 1000) return;
-          lastFix = t;
-          c.width = w;
-          c.height = h;
-          trace("canvas normalized " + w + "x" + h);
+          window.dispatchEvent(new Event("resize"));
+          trace("resize nudge: " + reason);
         } catch (e) {}
       }
-      window.addEventListener("resize", function () { setTimeout(normalize, 400); }, true);
-      setInterval(normalize, 2000);
+      window.addEventListener("resize", function () { nudge("window"); }, true);
+      document.addEventListener("fullscreenchange", function () { setTimeout(function () { nudge("fullscreen"); }, 300); }, true);
+      document.addEventListener("webkitfullscreenchange", function () { setTimeout(function () { nudge("fullscreen"); }, 300); }, true);
+      document.addEventListener("pointerlockchange", function () {
+        if (document.pointerLockElement) setTimeout(function () { nudge("lock"); }, 400);
+      });
+      var tries = 0;
+      var iv = setInterval(function () {
+        if (document.querySelector("canvas")) nudge("boot");
+        if (++tries >= 8) clearInterval(iv);
+      }, 1500);
     })();
 
     /* Ctrl+W protection: fullscreen + Keyboard Lock hands reserved browser
