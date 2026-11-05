@@ -1112,12 +1112,13 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       } catch (x) {}
     })();
 
-    /* Silent one-shot memory release: once the game is up, drop the wasm payload
-     * strings and their decompressed copies (compiled modules stay; nothing
-     * re-reads the bytes after boot). Costs nothing, frees a few hundred MB so
-     * the extra mesh workers don't push the heap toward a crash. */
+    /* Silent memory maintenance: after boot, then every 30s in-game, drop the wasm
+     * payload strings and decompressed copies and keep the boot log small. Runs
+     * continuously so memory is reclaimed during play too. No UI, no reload,
+     * nothing that touches gameplay. */
     (function () {
-      var done = false;
+      var JOURNAL_KEY = "eaglercraft26.crashJournal.v2";
+      var lastJournal = 0;
       function up() {
         try {
           var l = window.__log || [];
@@ -1129,24 +1130,33 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         return false;
       }
       function sweep() {
-        if (done) return;
         if (!up()) return;
-        done = true;
         try { if (typeof window.__eagReleaseInlineWasm === "function") window.__eagReleaseInlineWasm(); } catch (e) {}
         try {
           ["eag-inline-wasm-br", "eag-inline-mesh-wasm-br", "eag-inline-server-wasm-br"].forEach(function (id) {
             var el = document.getElementById(id);
-            if (el) el.textContent = "";
+            if (el && el.textContent) el.textContent = "";
           });
         } catch (e) {}
-        trace("silent memory release done");
+        try { var l = window.__log; if (l && l.length > 1200) l.splice(0, l.length - 800); } catch (e) {}
       }
-      var t = setInterval(function () { sweep(); if (done) clearInterval(t); }, 5000);
-      setTimeout(function () { if (!done) sweep(); }, 90000);
-      /* keep the boot log from growing unbounded */
-      setInterval(function () {
-        try { var l = window.__log; if (l && l.length > 2000) l.splice(0, l.length - 1200); } catch (e) {}
-      }, 10000);
+      var boot = setInterval(function () { sweep(); if (up()) clearInterval(boot); }, 5000);
+      setInterval(sweep, 30000);
+      /* silent: the crash journal rewrites localStorage every 2s and hitches the
+       * main thread; keep it at one write a minute */
+      try {
+        var origSet = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) {
+          try {
+            if (k === JOURNAL_KEY) {
+              var t = Date.now();
+              if (t - lastJournal < 60000) return;
+              lastJournal = t;
+            }
+          } catch (e) {}
+          return origSet.apply(this, arguments);
+        };
+      } catch (e) {}
     })();
 
     /* Mouse wheel -> hotbar slot (only while pointer is locked) */
