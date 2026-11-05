@@ -775,8 +775,8 @@ Z12aSGrXHoYwXux247w3UelvBftWMZo0Wlbr3iVBUh8E3CfkL+41ZHFc3Qbaqn8YqSFHaWIH21A2KQEL
 			var appleUnknownMemory = memory <= 0 && /Mac|iPhone|iPad|iPod/.test(
 				(navigator.platform || "") + " " + (navigator.userAgent || ""));
 			if ((memory > 0 && memory <= 4) || cores <= 4) return 1;
-			if (appleUnknownMemory) return 1;
-			return memory >= 8 && cores >= 8 ? 2 : 1;
+			if (appleUnknownMemory) return cores >= 8 ? 2 : 1;
+			return memory >= 8 && cores >= 8 ? 3 : 2;
 		}
 		window.eaglercraftXOpts = {
 			container: "game_frame",
