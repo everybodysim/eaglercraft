@@ -1170,18 +1170,28 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
      * actually changes and right after boot so it recomputes its own numbers. */
     (function () {
       var last = 0;
+      function fire(t) { try { if (t) t.dispatchEvent(new Event("resize")); } catch (e) {} }
       function nudge(reason) {
         var t = Date.now();
-        if (t - last < 1200) return;
+        if (t - last < 1000) return;
         last = t;
+        /* hit every target the engine could be listening on */
+        fire(window);
+        fire(document);
         try {
-          window.dispatchEvent(new Event("resize"));
-          trace("resize nudge: " + reason);
+          var c = document.querySelector("canvas");
+          if (c) { fire(c); fire(c.parentElement); fire(document.documentElement); }
         } catch (e) {}
+        trace("resize nudge: " + reason);
       }
       window.addEventListener("resize", function () { nudge("window"); }, true);
-      document.addEventListener("fullscreenchange", function () { setTimeout(function () { nudge("fullscreen"); }, 300); }, true);
-      document.addEventListener("webkitfullscreenchange", function () { setTimeout(function () { nudge("fullscreen"); }, 300); }, true);
+      function afterTransition(tag) {
+        setTimeout(function () { nudge(tag); }, 250);
+        setTimeout(function () { nudge(tag + " +1s"); }, 1200);
+        setTimeout(function () { nudge(tag + " +3s"); }, 3200);
+      }
+      document.addEventListener("fullscreenchange", function () { afterTransition("fullscreen"); }, true);
+      document.addEventListener("webkitfullscreenchange", function () { afterTransition("fullscreen"); }, true);
       document.addEventListener("pointerlockchange", function () {
         if (document.pointerLockElement) setTimeout(function () { nudge("lock"); }, 400);
       });
