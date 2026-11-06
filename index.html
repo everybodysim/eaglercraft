@@ -774,9 +774,9 @@ Z12aSGrXHoYwXux247w3UelvBftWMZo0Wlbr3iVBUh8E3CfkL+41ZHFc3Qbaqn8YqSFHaWIH21A2KQEL
 			var cores = Number(navigator.hardwareConcurrency) || 4;
 			var appleUnknownMemory = memory <= 0 && /Mac|iPhone|iPad|iPod/.test(
 				(navigator.platform || "") + " " + (navigator.userAgent || ""));
-			if ((memory > 0 && memory <= 4) || cores <= 4) return 2;
-			if (appleUnknownMemory) return cores >= 8 ? 3 : 2;
-			return memory >= 8 && cores >= 8 ? 5 : 3;
+			if ((memory > 0 && memory <= 4) || cores <= 4) return 1;
+			if (appleUnknownMemory) return cores >= 8 ? 2 : 1;
+			return memory >= 8 && cores >= 8 ? 4 : 2;
 		}
 		window.eaglercraftXOpts = {
 			container: "game_frame",
@@ -1140,8 +1140,9 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
         } catch (e) {}
         try { var l = window.__log; if (l && l.length > 1200) l.splice(0, l.length - 800); } catch (e) {}
       }
-      var boot = setInterval(function () { sweep(); if (up()) clearInterval(boot); }, 5000);
-      setInterval(sweep, 30000);
+      var boot = setInterval(function () {
+        if (up()) { sweep(); clearInterval(boot); setTimeout(sweep, 30000); }
+      }, 5000);
       /* silent: the crash journal rewrites localStorage every 2s and hitches the
        * main thread; keep it at one write a minute */
       try {
