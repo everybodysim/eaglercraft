@@ -1202,6 +1202,69 @@ var TeaVM=TeaVM||{};TeaVM.wasmGC=TeaVM.wasmGC||(()=>{let n=new Map;let e=null;le
       }, 1500);
     })();
 
+    /* Per-event canvas sync (cursor alignment).
+     * The engine turns cursor position into backing-store pixels using the canvas
+     * width/height it sees AT THE MOMENT of the event. Anywhere those drift from
+     * the real on-screen size (big screens, page zoom, DPI scaling, monitor moves)
+     * clicks land off-target. So right before every mouse event reaches the game,
+     * snap the canvas to a 1:1 size. Then every coordinate space agrees no matter
+     * which path the engine's math takes. */
+    (function () {
+      var lastSync = 0;
+      function sync() {
+        try {
+          var t = Date.now();
+          if (t - lastSync < 25) return;
+          lastSync = t;
+          var c = document.querySelector("canvas");
+          if (!c) return;
+          var r = c.getBoundingClientRect();
+          if (!r.width || !r.height) return;
+          var w = Math.round(r.width), h = Math.round(r.height);
+          if (Math.abs(c.width - w) > 1 || Math.abs(c.height - h) > 1) {
+            c.width = w;
+            c.height = h;
+            trace("click-sync canvas " + w + "x" + h);
+          }
+        } catch (e) {}
+      }
+      ["mousedown", "mousemove", "mouseup", "pointerdown", "pointerup", "wheel"].forEach(function (t) {
+        window.addEventListener(t, sync, true);
+      });
+      window.addEventListener("resize", function () { setTimeout(sync, 60); }, true);
+      setInterval(sync, 2000);
+    })();
+
+    /* Crash auto-recovery: when the engine's crash screen appears the session is
+     * already dead, so recover once instead of leaving a SIGILL screen sitting
+     * there. Guarded by a session flag so it can never loop. Worlds resume from
+     * their autosave. */
+    (function () {
+      var armed = true;
+      try { if (sessionStorage.getItem("ebs_crash_recovered") === "1") armed = false; } catch (e) {}
+      function crashVisible() {
+        try {
+          var el = document.getElementById("eaglercraftX_crash_element");
+          if (el && el.offsetParent !== null && el.textContent && el.textContent.length > 40) return true;
+        } catch (e) {}
+        try {
+          var l = window.__log || [];
+          for (var i = Math.max(0, l.length - 120); i < l.length; i++) {
+            var s = String(l[i]);
+            if (s.indexOf("SIGILL") >= 0 || s.indexOf("SIGSEGV") >= 0 || s.indexOf("OutOfMemoryError") >= 0) return true;
+          }
+        } catch (e) {}
+        return false;
+      }
+      setInterval(function () {
+        if (!armed) return;
+        if (!crashVisible()) return;
+        armed = false;
+        try { sessionStorage.setItem("ebs_crash_recovered", "1"); } catch (e) {}
+        setTimeout(function () { try { window.location.reload(); } catch (e) {} }, 900);
+      }, 2500);
+    })();
+
     /* Ctrl+W protection: fullscreen + Keyboard Lock hands reserved browser
      * shortcuts to the game. Outside fullscreen a leave-confirmation stops an
      * accidental close instead. ?nofs disables the fullscreen arm. */
